@@ -48,19 +48,36 @@ final class Application extends WinterApplication
 **2. Put it in the image:**
 
 ```bash
-php call service docker          # Dockerfile block + docker-compose.override.yml
-docker compose up -d --build
+php call service docker          # Dockerfile block; prints what compose needs
 ```
 
-The Dockerfile gets `apk add postgresql18 postgresql18-client postgresql18-contrib` and its directories, owned by
-`winter`; `docker-compose.override.yml` gets the `postgres-data` volume and the
-`stop_grace_period` the stop needs. Your `docker-compose.yml` is not edited.
+The Dockerfile gets `apk add postgresql18 postgresql18-client postgresql18-contrib` and its
+directories, owned by `winter`. Compose is yours: the command does not edit it, it prints
+what to add. Put into `docker-compose.yml` what suits you:
+
+```yaml
+services:
+  server:
+    stop_grace_period: 70s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+volumes:
+  postgres-data:
+```
+
+- **`stop_grace_period`** — always needed, see below.
+- **The volume** — if the database must outlive a recreated container. For tests or a
+  throwaway stand it can go. The data directory is already inside a volume of yours
+  (`data: '/var/lib/app/postgresql'`)? No separate volume is needed.
 
 > [!WARNING]
-> **A stop needs up to 70 seconds.** `call service docker` writes `stop_grace_period: 70s`.
-> Docker's default is 10 s: after that it kills the container, and PostgreSQL has no time
-> to stop cleanly. Running without the override, or on Kubernetes? Set 70 seconds yourself
-> — see *Stopping*.
+> **A stop needs up to 70 seconds:** `stop_grace_period: 70s`. Docker's default is 10 s:
+> after that it kills the container, and PostgreSQL has no time to stop cleanly. On
+> Kubernetes, set the same 70 seconds — see *Stopping*.
+
+```bash
+docker compose up -d --build
+```
 
 **3. Start it.** On the first start the log says:
 
@@ -85,7 +102,7 @@ already answering.
 | Parameter | Default | What it sets |
 | --- | --- | --- |
 | `version` | `18` | The major version: the image installs `postgresql{version}`. Data of another version is refused at start (see *Upgrading*) |
-| `data` | `/var/lib/postgresql/data` | The data directory — kept in a volume |
+| `data` | `/var/lib/postgresql/data` | The data directory — keep it in a volume |
 | `socket` | `/run/postgresql` | The directory of the Unix socket |
 | `host` | `null` | `null`: the socket only — nothing outside the container reaches the server. `127.0.0.1`: TCP inside the container too. `0.0.0.0`: other containers as well. **A host needs a password** |
 | `port` | `5432` | The TCP port; the socket's name carries it too (`.s.PGSQL.5432`) |
@@ -103,7 +120,7 @@ already answering.
 
 | Parameter | Default | What it sets |
 | --- | --- | --- |
-| `name` | `'postgres'` | How logs and `app status` name it; the volume is `{name}-data` |
+| `name` | `'postgres'` | How logs and `app status` name it; the volume in the compose hint is `{name}-data` |
 | `priority` | `Priority::High` | Up before the rest, down after it |
 | `critical` | `true` | The application stops when it cannot run |
 | `retries` | `3` | Restarts after a crash within 30 minutes |
@@ -345,12 +362,11 @@ PostgreSQL stops last, **after** HTTP, so their times add up:
 | the container's margin | 5 |
 | **`stop_grace_period`** | **70** |
 
-That is what `call service docker` writes into `docker-compose.override.yml`, and it
-overrides the `stop_grace_period` of your `docker-compose.yml`, even a smaller one. A stop
-usually takes a fraction of a second: 70 is the limit, not a wait.
+That is the number `call service docker` prints. A stop usually takes a fraction of a
+second: 70 is the limit, not a wait.
 
-Changed `grace` (`new Postgres(grace: 60.0)`)? Run `call service docker` again and the time
-follows — 100 seconds here. On Kubernetes, the same number goes into
+Changed `grace` (`new Postgres(grace: 60.0)`)? Run `call service docker` again and update
+`stop_grace_period` in compose — 100 seconds here. On Kubernetes, the same number goes into
 `terminationGracePeriodSeconds`.
 
 ---
