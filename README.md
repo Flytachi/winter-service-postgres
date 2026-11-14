@@ -3,6 +3,8 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/flytachi/winter-service-postgres.svg)](https://packagist.org/packages/flytachi/winter-service-postgres)
 [![PHP Version Require](https://img.shields.io/packagist/php-v/flytachi/winter-service-postgres.svg?style=flat-square)](https://packagist.org/packages/flytachi/winter-service-postgres)
 [![Software License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
+[![Tests](https://github.com/flytachi/winter-service-postgres/actions/workflows/tests.yml/badge.svg)](https://github.com/flytachi/winter-service-postgres/actions/workflows/tests.yml)
+[![Docs](https://img.shields.io/badge/docs-winterframe.net-blue.svg)](https://winterframe.net/docs/service-postgres)
 
 PostgreSQL inside a Winter application's container, declared in one line. The application
 starts it before everything else, waits until it answers, keeps checking it, restarts it
