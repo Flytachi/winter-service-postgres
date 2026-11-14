@@ -21,7 +21,7 @@
     },
     "require": {
         "php": ">=8.4",
-        "flytachi/winter-kernel": "@dev",
+        "flytachi/winter-kernel": "^4.5",
         "ext-pcntl": "*"
     },
     "require-dev": {

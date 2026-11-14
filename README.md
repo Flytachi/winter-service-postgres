@@ -24,7 +24,7 @@ It runs the server; to **connect** to it, use PDO or winter-ppa — see *Connect
 composer require flytachi/winter-service-postgres
 ```
 
-Requires PHP **8.4+**, `flytachi/winter-kernel` **4.4.5+** and the `flytachi/winter` image
+Requires PHP **8.4+**, `flytachi/winter-kernel` **4.5+** and the `flytachi/winter` image
 (Alpine): the server itself comes from `apk`, and `call service docker` puts it there.
 
 ---
@@ -366,6 +366,12 @@ PostgreSQL's log goes into the application's: the same format, the `-postgres-` 
 - JSON and the log file work as for the application; in JSON the PID is `extra.program`.
 - The start script's lines are under `-postgres-` too, its warnings and errors at `WARN`
   and `ERROR`.
+
+> [!NOTE]
+> PostgreSQL's lines go through the application's logger: without `LOG_LEVEL` (the log
+> off) they are not seen either — the reason the database did not start among them, only
+> `postgres failed: exit code 1` is left. Set `LOG_LEVEL=error` to see errors only, or
+> `logs: false` for PostgreSQL's own output.
 
 A `log_line_prefix` of your own is not understood: those lines are logged as they are, at
 `INFO`. `logs: false` leaves PostgreSQL's output untouched. For a detailed query log
