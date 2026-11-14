@@ -23,9 +23,15 @@ use Flytachi\Winter\Kernel\App\ServiceImage;
  * ```
  *
  * On its first start the data directory is initialised (`initdb`); on every start the
- * version of the data is checked against the server's, the database is created when it
- * is missing and the password kept in step. By default the server listens on its Unix
- * socket only: nothing outside the container reaches it.
+ * version of the data is checked against the server's, and the application's role, its
+ * password and its database are kept in step with the code. By default the server
+ * listens on its Unix socket only: nothing outside the container reaches it.
+ *
+ * Two roles: the superuser (`postgres`), for the start script and an administrator,
+ * through the socket only; and the application's (`$user`) — a login without superuser
+ * rights, the owner of its database. An SQL injection through the application's
+ * connection reaches that database's data, not the container: no `COPY … PROGRAM`, no
+ * `pg_read_file()`, no `ALTER SYSTEM`.
  *
  * @link https://winterframe.net/docs/services Services inside the application
  */
@@ -37,10 +43,19 @@ final readonly class Postgres implements Service
     /** The variable the password reaches the start script in — never the command line. */
     public const string PASSWORD_VARIABLE = 'WINTER_POSTGRES_PASSWORD';
 
+    /** The superuser `initdb` makes: the start script's and an administrator's, never the application's. */
+    public const string SUPERUSER = 'postgres';
+
+    /** The databases a cluster has of its own: not one to hand to the application. */
+    private const array SYSTEM_DATABASES = ['postgres', 'template0', 'template1'];
+
     private const string NAME = '/^[A-Za-z_][A-Za-z0-9_]{0,62}$/';
 
     /** What the apk package makes its own: the parent of the default data directory. */
     private const string HOME = '/var/lib/postgresql';
+
+    /** The application's database: the one given, or one named after the role. */
+    public string $database;
 
     /**
      * @param int $version The major version: the image installs `postgresql{version}`, and
@@ -50,13 +65,18 @@ final readonly class Postgres implements Service
      * @param string|null $host Null: the socket only. `127.0.0.1`: TCP inside the container too.
      *     `0.0.0.0`: other containers as well. A host needs a password.
      * @param int $port The TCP port; the socket's name carries it too (`.s.PGSQL.5432`).
-     * @param string $user The superuser `initdb` creates.
-     * @param string|null $password Over TCP it is asked for (scram-sha-256); through the socket
-     *     it is not. Kept in step with the database on every start.
-     * @param string|null $database A database created when it is missing.
+     * @param string $user The application's role: a login without superuser rights, the owner
+     *     of its database; created when it is missing.
+     * @param string|null $password The role's password: over TCP it is asked for
+     *     (scram-sha-256); through the socket it is not. Kept in step on every start.
+     * @param string|null $database The application's database, created when it is missing;
+     *     null — one named after the role.
      * @param string $encoding The encoding `initdb` gives the cluster.
      * @param string $locale The locale `initdb` gives the cluster; `C` on Alpine, whose musl
      *     has few others.
+     * @param bool $contrib Whether the image gets `postgresql{version}-contrib` — pgcrypto,
+     *     pg_trgm, citext, hstore and the rest, for `CREATE EXTENSION` (winter-ppa's
+     *     `#[Extension]`).
      * @param array<string, scalar> $settings Server settings, each passed as `-c key=value`:
      *     `['shared_buffers' => '256MB', 'max_connections' => 200]`.
      * @param list<string> $args Further `postgres` arguments, as they are.
@@ -81,9 +101,10 @@ final readonly class Postgres implements Service
         public string $user = 'winter',
         #[\SensitiveParameter]
         public ?string $password = null,
-        public ?string $database = null,
+        ?string $database = null,
         public string $encoding = 'UTF8',
         public string $locale = 'C',
+        public bool $contrib = true,
         public array $settings = [],
         public array $args = [],
         public Shutdown $shutdown = Shutdown::Fast,
@@ -118,13 +139,25 @@ final readonly class Postgres implements Service
                 "PostgreSQL listens on {$host}: set a password — over TCP every connection is asked for one."
             );
         }
-        foreach (['user' => $user, 'database' => $database ?? 'postgres'] as $what => $value) {
+        foreach (['user' => $user, 'database' => $database ?? $user] as $what => $value) {
             if (preg_match(self::NAME, $value) !== 1) {
                 throw new \InvalidArgumentException(
                     "{$what} must be a plain name (letters, digits, _), \"{$value}\" given."
                 );
             }
         }
+        if ($user === self::SUPERUSER || str_starts_with($user, 'pg_')) {
+            throw new \InvalidArgumentException(
+                "user \"{$user}\" is the superuser's or a reserved name: the application connects as a role of its own."
+            );
+        }
+        $database ??= $user;
+        if (in_array($database, self::SYSTEM_DATABASES, true)) {
+            throw new \InvalidArgumentException(
+                "database \"{$database}\" is the cluster's own: name the application's database."
+            );
+        }
+        $this->database = $database;
         foreach ($settings as $key => $value) {
             if (preg_match('/^[a-z_][a-z0-9_.]*$/i', (string) $key) !== 1) {
                 throw new \InvalidArgumentException("not a setting name: \"{$key}\".");
@@ -150,15 +183,14 @@ final readonly class Postgres implements Service
             '--data=' . $this->data,
             '--socket=' . $this->socket,
             '--port=' . $this->port,
+            '--superuser=' . self::SUPERUSER,
             '--user=' . $this->user,
+            '--database=' . $this->database,
             '--encoding=' . $this->encoding,
             '--locale=' . $this->locale,
         ];
         if ($this->host !== null) {
             $options[] = '--host=' . $this->host;
-        }
-        if ($this->database !== null) {
-            $options[] = '--database=' . $this->database;
         }
         $server = [];
         foreach ($this->settings as $key => $value) {
@@ -189,23 +221,27 @@ final readonly class Postgres implements Service
         // a data directory inside it is out of winter's reach unless it is winter's too.
         $directories = str_starts_with($this->data, self::HOME . '/') ? [self::HOME => 0755] : [];
         $directories += [$this->data => 0700, $this->socket => 0755];
+        $packages = ["postgresql{$this->version}", "postgresql{$this->version}-client"];
+        if ($this->contrib) {
+            $packages[] = "postgresql{$this->version}-contrib";
+        }
         return new ServiceImage(
-            packages: ["postgresql{$this->version}", "postgresql{$this->version}-client"],
+            packages: $packages,
             directories: $directories,
             volumes: ["{$this->name}-data" => $this->data],
         );
     }
 
     /**
-     * How the application connects: through the socket, to the database (`postgres`
-     * without one) — a DSN for PDO and winter-ppa.
+     * How the application connects: through the socket, to its database — a DSN for PDO
+     * and winter-ppa.
      */
     public function dsn(): string
     {
-        return sprintf('pgsql:host=%s;port=%d;dbname=%s', $this->socket, $this->port, $this->database ?? 'postgres');
+        return sprintf('pgsql:host=%s;port=%d;dbname=%s', $this->socket, $this->port, $this->database);
     }
 
-    /** The user to connect as. */
+    /** The role to connect as: the application's, not the superuser. */
     public function user(): string
     {
         return $this->user;
@@ -218,9 +254,9 @@ final readonly class Postgres implements Service
     }
 
     /**
-     * `pg_isready` against this server: 0 once it accepts connections. To the `postgres`
-     * database by name — without one it asks for the user's own, and the server logs a
-     * FATAL on every check.
+     * `pg_isready` against this server: 0 once it accepts connections. As the application's
+     * role, to its database — both there before the server starts, so the server logs no
+     * FATAL on a check.
      *
      * @return list<string>
      */
@@ -232,7 +268,7 @@ final readonly class Postgres implements Service
             '-h', $this->socket,
             '-p', (string) $this->port,
             '-U', $this->user,
-            '-d', 'postgres',
+            '-d', $this->database,
         ];
     }
 

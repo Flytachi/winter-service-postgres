@@ -4,16 +4,18 @@
 #
 # Started by Flytachi\Winter\Service\Postgres\Postgres; its options are that class's:
 #
-#   --bin=DIR --version=N --data=DIR --socket=DIR --port=N --user=NAME
-#   --encoding=E --locale=L [--host=ADDR] [--database=NAME] [-- server arguments…]
+#   --bin=DIR --version=N --data=DIR --socket=DIR --port=N --superuser=NAME --user=NAME
+#   --database=NAME --encoding=E --locale=L [--host=ADDR] [-- server arguments…]
 #
-# The password, when there is one, comes in WINTER_POSTGRES_PASSWORD — never on the
-# command line, which every process in the container can read.
+# Two roles: the superuser initdb makes — for this script and an administrator, through
+# the socket only — and the application's role: a login without superuser rights, the
+# owner of its database. The application's password, when there is one, comes in
+# WINTER_POSTGRES_PASSWORD — never on the command line, which every process can read.
 set -eu
 
 say() { printf 'winter-postgres: %s\n' "$*" >&2; }
 
-BIN= VERSION= DATA= SOCKET= PORT= USER_NAME= ENCODING= LOCALE= HOST= DATABASE=
+BIN= VERSION= DATA= SOCKET= PORT= SUPERUSER= USER_NAME= ENCODING= LOCALE= HOST= DATABASE=
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin=*) BIN=${1#*=} ;;
@@ -21,6 +23,7 @@ while [ $# -gt 0 ]; do
         --data=*) DATA=${1#*=} ;;
         --socket=*) SOCKET=${1#*=} ;;
         --port=*) PORT=${1#*=} ;;
+        --superuser=*) SUPERUSER=${1#*=} ;;
         --user=*) USER_NAME=${1#*=} ;;
         --encoding=*) ENCODING=${1#*=} ;;
         --locale=*) LOCALE=${1#*=} ;;
@@ -57,19 +60,12 @@ if [ ! -s "$DATA/PG_VERSION" ]; then
     fi
     mkdir -p "$DATA"
     chmod 700 "$DATA"
-    pwfile=
-    if [ -n "$PASSWORD" ]; then
-        pwfile=$(mktemp)
-        printf '%s' "$PASSWORD" > "$pwfile"
-    fi
-    # Through the socket — inside the container only — no password; over TCP, always one.
-    if ! "$BIN/initdb" -D "$DATA" --username="$USER_NAME" --encoding="$ENCODING" --locale="$LOCALE" \
-        --auth-local=trust --auth-host=scram-sha-256 ${pwfile:+--pwfile="$pwfile"} >/dev/null; then
-        [ -n "$pwfile" ] && rm -f "$pwfile"
+    # The superuser has no password: it signs in through the socket, inside the container.
+    if ! "$BIN/initdb" -D "$DATA" --username="$SUPERUSER" --encoding="$ENCODING" --locale="$LOCALE" \
+        --auth-local=trust --auth-host=scram-sha-256 >/dev/null; then
         say "initdb failed for $DATA."
         exit 1
     fi
-    [ -n "$pwfile" ] && rm -f "$pwfile"
     say "initialised PostgreSQL $VERSION data in $DATA."
 else
     found=$(cat "$DATA/PG_VERSION")
@@ -79,30 +75,50 @@ else
     fi
 fi
 
-# Kept in step with the code on every start: a database added later, a password changed.
-if [ -n "$DATABASE" ] && [ "$DATABASE" != postgres ]; then
-    # A failure inside $(…) ends only the subshell: checked here, it ends the script.
-    existing=$(single "SELECT datname FROM pg_database WHERE datname = '$DATABASE';") || exit 1
-    case "$existing" in
-        *"datname = \"$DATABASE\""*) ;;
-        *) single "CREATE DATABASE \"$DATABASE\";" >/dev/null; say "created database $DATABASE." ;;
-    esac
-fi
+# Kept in step with the code on every start: the role, its password, its database.
+# A failure inside $(…) ends only the subshell: each one is checked, to end the script.
+role=$(single "SELECT oid, rolsuper FROM pg_roles WHERE rolname = '$USER_NAME';") || exit 1
+case "$role" in
+    *'rolsuper = "t"'*)
+        # Data made before the application had a role of its own: left working, said.
+        case "$role" in
+            *'oid = "10"'*) fix="it is the cluster's own superuser — move the data into a new cluster (pg_dump), or start with an empty data directory" ;;
+            *) fix="ALTER ROLE \"$USER_NAME\" NOSUPERUSER, as $SUPERUSER" ;;
+        esac
+        say "$USER_NAME is a superuser: the application connects with every right. To change it: $fix." ;;
+    *'oid = '*) ;;
+    *) single "CREATE ROLE \"$USER_NAME\" LOGIN;" >/dev/null; say "created role $USER_NAME." ;;
+esac
 if [ -n "$PASSWORD" ]; then
     quoted=$(printf '%s' "$PASSWORD" | sed "s/'/''/g")
-    single "ALTER USER \"$USER_NAME\" PASSWORD '$quoted';" >/dev/null
+    single "ALTER ROLE \"$USER_NAME\" PASSWORD '$quoted';" >/dev/null
+else
+    single "ALTER ROLE \"$USER_NAME\" PASSWORD NULL;" >/dev/null
 fi
+owner=$(single "SELECT pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname = '$DATABASE';") || exit 1
+case "$owner" in
+    *"owner = \"$USER_NAME\""*) ;;
+    *'owner = '*)
+        single "ALTER DATABASE \"$DATABASE\" OWNER TO \"$USER_NAME\";" >/dev/null
+        say "database $DATABASE now belongs to $USER_NAME." ;;
+    *)
+        single "CREATE DATABASE \"$DATABASE\" OWNER \"$USER_NAME\";" >/dev/null
+        say "created database $DATABASE." ;;
+esac
 
-# Other containers may connect only through an address that is not the loopback: their
-# connections arrive from outside, and initdb wrote host lines for 127.0.0.1 and ::1 only.
-if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ] && [ "$HOST" != localhost ] && [ "$HOST" != ::1 ]; then
-    if ! grep -q '^# winter-postgres: any address$' "$DATA/pg_hba.conf"; then
-        {
-            echo '# winter-postgres: any address'
-            echo 'host    all             all             0.0.0.0/0               scram-sha-256'
-            echo 'host    all             all             ::/0                    scram-sha-256'
-        } >> "$DATA/pg_hba.conf"
+# Who may connect, written whole on every start: through the socket, anyone — it is
+# inside the container; over TCP, only the application's role, only to its database,
+# with its password. Other containers reach the server only through an address that is
+# not the loopback.
+{
+    echo '# Written by winter-postgres on every start: change the service, not this file.'
+    echo 'local   all             all                                     trust'
+    echo "host    $DATABASE       $USER_NAME       127.0.0.1/32            scram-sha-256"
+    echo "host    $DATABASE       $USER_NAME       ::1/128                 scram-sha-256"
+    if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ] && [ "$HOST" != localhost ] && [ "$HOST" != ::1 ]; then
+        echo "host    $DATABASE       $USER_NAME       0.0.0.0/0               scram-sha-256"
+        echo "host    $DATABASE       $USER_NAME       ::/0                    scram-sha-256"
     fi
-fi
+} > "$DATA/pg_hba.conf"
 
 exec "$BIN/postgres" -D "$DATA" -k "$SOCKET" -p "$PORT" -c "listen_addresses=$HOST" "$@"

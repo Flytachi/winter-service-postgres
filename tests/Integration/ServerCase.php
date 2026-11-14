@@ -116,6 +116,17 @@ abstract class ServerCase extends TestCase
         return new \PDO($postgres->dsn(), $postgres->user(), $password, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
     }
 
+    /** The superuser, through the socket: what the start script and an administrator use. */
+    protected function superuser(Postgres $postgres): \PDO
+    {
+        return new \PDO(
+            "pgsql:host={$postgres->socket};port={$postgres->port};dbname=postgres",
+            Postgres::SUPERUSER,
+            null,
+            [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION],
+        );
+    }
+
     protected function freePort(): int
     {
         $server = stream_socket_server('tcp://127.0.0.1:0');

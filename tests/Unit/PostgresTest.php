@@ -31,9 +31,9 @@ final class PostgresTest extends TestCase
         self::assertSame(60, $component->startTimeout);
         self::assertSame(SIGINT, $component->stopSignal, 'a fast shutdown');
         self::assertSame(
-            ['/usr/libexec/postgresql18/pg_isready', '-q', '-h', '/run/postgresql', '-p', '5432', '-U', 'winter', '-d', 'postgres'],
+            ['/usr/libexec/postgresql18/pg_isready', '-q', '-h', '/run/postgresql', '-p', '5432', '-U', 'winter', '-d', 'winter'],
             $component->ready,
-            'to the postgres database by name: without it the server logs a FATAL on every check',
+            'as the application, to its database: both there before the server starts',
         );
         self::assertNotNull($component->alive, 'checked while it runs');
         self::assertSame($component->ready, $component->alive->command);
@@ -61,10 +61,11 @@ final class PostgresTest extends TestCase
             '--data=/srv/pg',
             '--socket=/tmp/pg',
             '--port=5433',
+            '--superuser=postgres',
             '--user=app',
+            '--database=shop',
             '--encoding=UTF8',
             '--locale=C',
-            '--database=shop',
             '--',
             '-c', 'shared_buffers=256MB',
             '-c', 'max_connections=200',
@@ -136,9 +137,27 @@ final class PostgresTest extends TestCase
         );
     }
 
+    public function test_contrib_is_in_the_image_unless_it_is_turned_off(): void
+    {
+        self::assertSame(
+            ['postgresql18', 'postgresql18-client', 'postgresql18-contrib'],
+            (new Postgres())->image()->packages,
+            'so that CREATE EXTENSION pgcrypto, pg_trgm… (winter-ppa #[Extension]) finds its files',
+        );
+        self::assertSame(['postgresql18', 'postgresql18-client'], (new Postgres(contrib: false))->image()->packages);
+    }
+
+    public function test_the_application_s_database_is_named_after_its_role_unless_given(): void
+    {
+        self::assertSame('winter', (new Postgres())->database);
+        self::assertSame('app', (new Postgres(user: 'app'))->database);
+        self::assertSame('shop', (new Postgres(user: 'app', database: 'shop'))->database);
+        self::assertContains('--database=winter', (new Postgres())->component()->command);
+    }
+
     public function test_the_image_holds_this_version_its_directories_and_a_volume(): void
     {
-        $image = (new Postgres(version: 16, data: '/srv/pg', name: 'main-db'))->image();
+        $image = (new Postgres(version: 16, data: '/srv/pg', contrib: false, name: 'main-db'))->image();
 
         self::assertSame(['postgresql16', 'postgresql16-client'], $image->packages);
         self::assertSame(['/srv/pg' => 0700, '/run/postgresql' => 0755], $image->directories);
@@ -147,7 +166,7 @@ final class PostgresTest extends TestCase
 
     public function test_the_application_connects_through_the_socket(): void
     {
-        self::assertSame('pgsql:host=/run/postgresql;port=5432;dbname=postgres', (new Postgres())->dsn());
+        self::assertSame('pgsql:host=/run/postgresql;port=5432;dbname=winter', (new Postgres())->dsn());
         self::assertSame('pgsql:host=/tmp/pg;port=5433;dbname=shop', (new Postgres(socket: '/tmp/pg', port: 5433, database: 'shop'))->dsn());
         self::assertSame('app', (new Postgres(user: 'app'))->user());
     }
@@ -162,6 +181,10 @@ final class PostgresTest extends TestCase
         yield 'a host without a password' => [static fn() => new Postgres(host: '0.0.0.0'), 'set a password'];
         yield 'a user that is not a plain name' => [static fn() => new Postgres(user: 'app; drop'), 'user must be a plain name'];
         yield 'a database that is not a plain name' => [static fn() => new Postgres(database: "x'y"), 'database must be a plain name'];
+        yield 'the superuser for the application' => [static fn() => new Postgres(user: 'postgres'), 'the superuser\'s or a reserved name'];
+        yield 'a reserved role name' => [static fn() => new Postgres(user: 'pg_app'), 'the superuser\'s or a reserved name'];
+        yield 'the cluster\'s own database' => [static fn() => new Postgres(database: 'postgres'), 'is the cluster\'s own'];
+        yield 'a template' => [static fn() => new Postgres(database: 'template1'), 'is the cluster\'s own'];
         yield 'a setting name with a space' => [static fn() => new Postgres(settings: ['shared buffers' => '1']), 'not a setting name'];
         yield 'a setting value on two lines' => [static fn() => new Postgres(settings: ['x' => "a\nb"]), 'a value is one line'];
         yield 'args that are not strings' => [static fn() => new Postgres(args: [1]), 'args are a list of strings'];
