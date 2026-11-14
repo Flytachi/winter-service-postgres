@@ -81,6 +81,9 @@ final readonly class Postgres implements Service
      *     `['shared_buffers' => '256MB', 'max_connections' => 200]`.
      * @param list<string> $args Further `postgres` arguments, as they are.
      * @param Shutdown $shutdown How the server is asked to stop.
+     * @param bool $logs Whether PostgreSQL's log goes into the application's
+     *     ({@see PostgresOutput}): its levels, `LOG_LEVEL`, the line or JSON format. False:
+     *     it is written as PostgreSQL writes it.
      * @param string $name How logs, `app status` and the volume name it.
      * @param Priority $priority When it starts and stops relative to the other components.
      * @param bool $critical Whether the application stops when it cannot run.
@@ -108,6 +111,7 @@ final readonly class Postgres implements Service
         public array $settings = [],
         public array $args = [],
         public Shutdown $shutdown = Shutdown::Fast,
+        public bool $logs = true,
         public string $name = 'postgres',
         public Priority $priority = Priority::High,
         public bool $critical = true,
@@ -212,6 +216,7 @@ final readonly class Postgres implements Service
             stopSignal: $this->shutdown->signal(),
             retries: $this->retries,
             startTimeout: $this->startTimeout,
+            output: $this->logs ? new PostgresOutput() : null,
         );
     }
 

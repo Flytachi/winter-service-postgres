@@ -13,7 +13,11 @@
 # WINTER_POSTGRES_PASSWORD — never on the command line, which every process can read.
 set -eu
 
+# What it says, one line each; a warning or an error says so first, as PostgreSQL does —
+# the service's parser reads it as that level.
 say() { printf 'winter-postgres: %s\n' "$*" >&2; }
+warn() { say "WARNING: $*"; }
+fail() { say "ERROR: $*"; exit "${CODE:-1}"; }
 
 BIN= VERSION= DATA= SOCKET= PORT= SUPERUSER= USER_NAME= ENCODING= LOCALE= HOST= DATABASE=
 while [ $# -gt 0 ]; do
@@ -30,7 +34,7 @@ while [ $# -gt 0 ]; do
         --host=*) HOST=${1#*=} ;;
         --database=*) DATABASE=${1#*=} ;;
         --) shift; break ;;
-        *) say "unknown option $1"; exit 2 ;;
+        *) CODE=2 fail "unknown option $1" ;;
     esac
     shift
 done
@@ -38,40 +42,36 @@ PASSWORD=${WINTER_POSTGRES_PASSWORD:-}
 unset WINTER_POSTGRES_PASSWORD
 
 if [ ! -x "$BIN/postgres" ]; then
-    say "PostgreSQL $VERSION is not installed: no $BIN/postgres. Add it to the image: call service docker"
-    exit 1
+    fail "PostgreSQL $VERSION is not installed: no $BIN/postgres. Add it to the image: call service docker"
 fi
 mkdir -p "$SOCKET"
 
 # Runs one statement in single-user mode — the server is not up yet — and fails on an
 # ERROR: single-user mode exits 0 whatever the statement did.
 single() {
-    out=$(printf '%s\n' "$1" | "$BIN/postgres" --single -D "$DATA" postgres 2>&1) || { say "$out"; exit 1; }
+    out=$(printf '%s\n' "$1" | "$BIN/postgres" --single -D "$DATA" postgres 2>&1) || fail "$out"
     case "$out" in
-        *ERROR*) say "$(printf '%s\n' "$out" | grep ERROR | head -1)"; exit 1 ;;
+        *ERROR*) fail "$(printf '%s\n' "$out" | grep ERROR | head -1)" ;;
     esac
     printf '%s\n' "$out"
 }
 
 if [ ! -s "$DATA/PG_VERSION" ]; then
     if [ -n "$(ls -A "$DATA" 2>/dev/null)" ]; then
-        say "$DATA holds files but no PostgreSQL data: it is not initialised over them."
-        exit 1
+        fail "$DATA holds files but no PostgreSQL data: it is not initialised over them."
     fi
     mkdir -p "$DATA"
     chmod 700 "$DATA"
     # The superuser has no password: it signs in through the socket, inside the container.
     if ! "$BIN/initdb" -D "$DATA" --username="$SUPERUSER" --encoding="$ENCODING" --locale="$LOCALE" \
         --auth-local=trust --auth-host=scram-sha-256 >/dev/null; then
-        say "initdb failed for $DATA."
-        exit 1
+        fail "initdb failed for $DATA."
     fi
     say "initialised PostgreSQL $VERSION data in $DATA."
 else
     found=$(cat "$DATA/PG_VERSION")
     if [ "$found" != "$VERSION" ]; then
-        say "the data in $DATA is PostgreSQL $found, the server is $VERSION: upgrade it with pg_upgrade, or set version: $found."
-        exit 1
+        fail "the data in $DATA is PostgreSQL $found, the server is $VERSION: upgrade it with pg_upgrade, or set version: $found."
     fi
 fi
 
@@ -85,7 +85,7 @@ case "$role" in
             *'oid = "10"'*) fix="it is the cluster's own superuser — move the data into a new cluster (pg_dump), or start with an empty data directory" ;;
             *) fix="ALTER ROLE \"$USER_NAME\" NOSUPERUSER, as $SUPERUSER" ;;
         esac
-        say "$USER_NAME is a superuser: the application connects with every right. To change it: $fix." ;;
+        warn "$USER_NAME is a superuser: the application connects with every right. To change it: $fix." ;;
     *'oid = '*) ;;
     *) single "CREATE ROLE \"$USER_NAME\" LOGIN;" >/dev/null; say "created role $USER_NAME." ;;
 esac

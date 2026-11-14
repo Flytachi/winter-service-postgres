@@ -82,16 +82,17 @@ docker compose up -d --build
 **3. Start it.** On the first start the log says:
 
 ```
-Application starting High: postgres
-winter-postgres: initialised PostgreSQL 18 data in /var/lib/postgresql/data.
-winter-postgres: created role winter.
-winter-postgres: created database app.
-postgres is up.
-Application starting Normal: Http
+[2026-11-15 02:10:00] [INFO ] -sys- [1]: Application starting High: postgres
+[2026-11-15 02:10:01] [INFO ] -postgres- [9]: initialised PostgreSQL 18 data in /var/lib/postgresql/data.
+[2026-11-15 02:10:01] [INFO ] -postgres- [9]: created role winter.
+[2026-11-15 02:10:02] [INFO ] -postgres- [9]: created database app.
+[2026-11-15 02:10:02] [INFO ] -postgres- [9]: database system is ready to accept connections
+[2026-11-15 02:10:02] [INFO ] -sys- [1]: postgres is up.
+[2026-11-15 02:10:02] [INFO ] -sys- [1]: Application starting Normal: Http
 ```
 
 PostgreSQL is up before everything else: HTTP takes its first request with the database
-already answering.
+already answering. Its lines are in the common log, under `-postgres-` — see *Log*.
 
 ---
 
@@ -115,6 +116,7 @@ already answering.
 | `settings` | `[]` | Server settings, each passed as `-c key=value`: `['shared_buffers' => '256MB', 'max_connections' => 200]`; `true`/`false` become `on`/`off` |
 | `args` | `[]` | Further `postgres` arguments, as they are |
 | `shutdown` | `Shutdown::Fast` | How it is asked to stop — see *Stopping* |
+| `logs` | `true` | Whether PostgreSQL's log goes into the application's — see *Log*. `false`: as PostgreSQL writes it |
 
 ### The component
 
@@ -339,6 +341,36 @@ container's name — for the host, and the password becomes mandatory.
 
 ---
 
+## Log
+
+PostgreSQL's log goes into the application's: the same format, the `-postgres-` channel
+(blue in colour), the PID of the database process that wrote the line in the brackets.
+
+```
+[2026-11-15 02:11:23] [ERROR] -postgres- [64]: relation "usres" does not exist at character 15 {"statement":"SELECT * FROM usres"}
+```
+
+| PostgreSQL | Log |
+| --- | --- |
+| `DEBUG1`–`DEBUG5` | `DEBUG` |
+| `LOG`, `INFO` | `INFO` |
+| `NOTICE` | `NOTIC` |
+| `WARNING` | `WARN` |
+| `ERROR` | `ERROR` |
+| `FATAL` | `CRIT` |
+| `PANIC` | `EMERG` |
+
+- `LOG_LEVEL` applies: `LOG_LEVEL=warning` keeps the database's warnings and errors only.
+- `DETAIL`, `HINT`, `STATEMENT`, `CONTEXT` join their error, in its context.
+- JSON and the log file work as for the application; in JSON the PID is `extra.program`.
+- The start script's lines are under `-postgres-` too, its warnings and errors at `WARN`
+  and `ERROR`.
+
+A `log_line_prefix` of your own is not understood: those lines are logged as they are, at
+`INFO`. `logs: false` leaves PostgreSQL's output untouched. For a detailed query log
+(`log_statement: 'all'`), turn on PostgreSQL's own collector (`'logging_collector' => true`):
+thousands of lines a second should not go through the application's process.
+
 ## Stopping
 
 | `shutdown` | Signal | What PostgreSQL does |
@@ -377,8 +409,7 @@ PostgreSQL 19 cannot read the data of 18: moving `version` up without upgrading 
 would leave a server that does not start. So it does not try:
 
 ```
-winter-postgres: the data in /var/lib/postgresql/data is PostgreSQL 18, the server is 19:
-upgrade it with pg_upgrade, or set version: 18.
+[2026-11-15 02:10:01] [ERROR] -postgres- [9]: the data in /var/lib/postgresql/data is PostgreSQL 18, the server is 19: upgrade it with pg_upgrade, or set version: 18.
 ```
 
 Upgrade with `pg_upgrade` (both versions in the image), or dump and restore
