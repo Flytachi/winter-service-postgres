@@ -1,0 +1,108 @@
+#!/bin/sh
+# winter-postgres — prepares PostgreSQL's data directory, then runs the server in its own
+# place (exec), so the stop signal the application sends reaches the server itself.
+#
+# Started by Flytachi\Winter\Service\Postgres\Postgres; its options are that class's:
+#
+#   --bin=DIR --version=N --data=DIR --socket=DIR --port=N --user=NAME
+#   --encoding=E --locale=L [--host=ADDR] [--database=NAME] [-- server arguments…]
+#
+# The password, when there is one, comes in WINTER_POSTGRES_PASSWORD — never on the
+# command line, which every process in the container can read.
+set -eu
+
+say() { printf 'winter-postgres: %s\n' "$*" >&2; }
+
+BIN= VERSION= DATA= SOCKET= PORT= USER_NAME= ENCODING= LOCALE= HOST= DATABASE=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --bin=*) BIN=${1#*=} ;;
+        --version=*) VERSION=${1#*=} ;;
+        --data=*) DATA=${1#*=} ;;
+        --socket=*) SOCKET=${1#*=} ;;
+        --port=*) PORT=${1#*=} ;;
+        --user=*) USER_NAME=${1#*=} ;;
+        --encoding=*) ENCODING=${1#*=} ;;
+        --locale=*) LOCALE=${1#*=} ;;
+        --host=*) HOST=${1#*=} ;;
+        --database=*) DATABASE=${1#*=} ;;
+        --) shift; break ;;
+        *) say "unknown option $1"; exit 2 ;;
+    esac
+    shift
+done
+PASSWORD=${WINTER_POSTGRES_PASSWORD:-}
+unset WINTER_POSTGRES_PASSWORD
+
+if [ ! -x "$BIN/postgres" ]; then
+    say "PostgreSQL $VERSION is not installed: no $BIN/postgres. Add it to the image: call service docker"
+    exit 1
+fi
+mkdir -p "$SOCKET"
+
+# Runs one statement in single-user mode — the server is not up yet — and fails on an
+# ERROR: single-user mode exits 0 whatever the statement did.
+single() {
+    out=$(printf '%s\n' "$1" | "$BIN/postgres" --single -D "$DATA" postgres 2>&1) || { say "$out"; exit 1; }
+    case "$out" in
+        *ERROR*) say "$(printf '%s\n' "$out" | grep ERROR | head -1)"; exit 1 ;;
+    esac
+    printf '%s\n' "$out"
+}
+
+if [ ! -s "$DATA/PG_VERSION" ]; then
+    if [ -n "$(ls -A "$DATA" 2>/dev/null)" ]; then
+        say "$DATA holds files but no PostgreSQL data: it is not initialised over them."
+        exit 1
+    fi
+    mkdir -p "$DATA"
+    chmod 700 "$DATA"
+    pwfile=
+    if [ -n "$PASSWORD" ]; then
+        pwfile=$(mktemp)
+        printf '%s' "$PASSWORD" > "$pwfile"
+    fi
+    # Through the socket — inside the container only — no password; over TCP, always one.
+    if ! "$BIN/initdb" -D "$DATA" --username="$USER_NAME" --encoding="$ENCODING" --locale="$LOCALE" \
+        --auth-local=trust --auth-host=scram-sha-256 ${pwfile:+--pwfile="$pwfile"} >/dev/null; then
+        [ -n "$pwfile" ] && rm -f "$pwfile"
+        say "initdb failed for $DATA."
+        exit 1
+    fi
+    [ -n "$pwfile" ] && rm -f "$pwfile"
+    say "initialised PostgreSQL $VERSION data in $DATA."
+else
+    found=$(cat "$DATA/PG_VERSION")
+    if [ "$found" != "$VERSION" ]; then
+        say "the data in $DATA is PostgreSQL $found, the server is $VERSION: upgrade it with pg_upgrade, or set version: $found."
+        exit 1
+    fi
+fi
+
+# Kept in step with the code on every start: a database added later, a password changed.
+if [ -n "$DATABASE" ] && [ "$DATABASE" != postgres ]; then
+    # A failure inside $(…) ends only the subshell: checked here, it ends the script.
+    existing=$(single "SELECT datname FROM pg_database WHERE datname = '$DATABASE';") || exit 1
+    case "$existing" in
+        *"datname = \"$DATABASE\""*) ;;
+        *) single "CREATE DATABASE \"$DATABASE\";" >/dev/null; say "created database $DATABASE." ;;
+    esac
+fi
+if [ -n "$PASSWORD" ]; then
+    quoted=$(printf '%s' "$PASSWORD" | sed "s/'/''/g")
+    single "ALTER USER \"$USER_NAME\" PASSWORD '$quoted';" >/dev/null
+fi
+
+# Other containers may connect only through an address that is not the loopback: their
+# connections arrive from outside, and initdb wrote host lines for 127.0.0.1 and ::1 only.
+if [ -n "$HOST" ] && [ "$HOST" != 127.0.0.1 ] && [ "$HOST" != localhost ] && [ "$HOST" != ::1 ]; then
+    if ! grep -q '^# winter-postgres: any address$' "$DATA/pg_hba.conf"; then
+        {
+            echo '# winter-postgres: any address'
+            echo 'host    all             all             0.0.0.0/0               scram-sha-256'
+            echo 'host    all             all             ::/0                    scram-sha-256'
+        } >> "$DATA/pg_hba.conf"
+    fi
+fi
+
+exec "$BIN/postgres" -D "$DATA" -k "$SOCKET" -p "$PORT" -c "listen_addresses=$HOST" "$@"

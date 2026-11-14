@@ -1,0 +1,43 @@
+{
+    "name": "flytachi/winter-service-postgres",
+    "description": "PostgreSQL inside a Winter application's container: a service the application starts first, checks, restarts and stops last",
+    "type": "library",
+    "license": "MIT",
+    "scripts": {
+        "test": "phpunit",
+        "test-integration": "sh docker/test.sh",
+        "cs-check": "phpcs .",
+        "cs-fix": "phpcbf ."
+    },
+    "autoload": {
+        "psr-4": {
+            "Flytachi\\Winter\\Service\\Postgres\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Flytachi\\Winter\\Service\\Postgres\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": ">=8.4",
+        "flytachi/winter-kernel": "@dev"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "@stable",
+        "squizlabs/php_codesniffer": "@stable"
+    },
+    "homepage": "https://winterframe.net",
+    "support": {
+        "issues": "https://github.com/flytachi/winter-service-postgres/issues",
+        "source": "https://github.com/flytachi/winter-service-postgres",
+        "docs": "https://winterframe.net/docs/services"
+    },
+    "keywords": ["postgresql", "postgres", "database", "service", "docker", "swoole", "winter"],
+    "authors": [
+        {
+            "name": "Flytachi",
+            "email": "jason.khan.x@gmail.com"
+        }
+    ]
+}

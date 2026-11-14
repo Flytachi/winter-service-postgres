@@ -1,0 +1,8 @@
+# The integration tests' image: flytachi/winter with two PostgreSQL versions, so that a
+# start against data of the other version can be tried. The package and the kernel are
+# mounted, not copied: see test.sh.
+FROM flytachi/winter:8.5
+USER root
+RUN apk add --no-cache postgresql17 postgresql17-client postgresql18 postgresql18-client
+USER winter
+WORKDIR /pkg
