@@ -57,6 +57,9 @@ final readonly class Postgres implements Service
     /** The application's database: the one given, or one named after the role. */
     public string $database;
 
+    /** The server's time zone: the one given, or the application's (`TIME_ZONE`). */
+    public string $timezone;
+
     /**
      * @param int $version The major version: the image installs `postgresql{version}`, and
      *     data of another version is refused at start rather than half-read.
@@ -74,6 +77,9 @@ final readonly class Postgres implements Service
      * @param string $encoding The encoding `initdb` gives the cluster.
      * @param string $locale The locale `initdb` gives the cluster; `C` on Alpine, whose musl
      *     has few others.
+     * @param string|null $timezone The server's time zone (`timezone`, `log_timezone`), set
+     *     on every start: what `now()::date` and `date_trunc('day', …)` count days by. Null —
+     *     the application's, `TIME_ZONE` (UTC without it), as PHP has it.
      * @param bool $contrib Whether the image gets `postgresql{version}-contrib` — pgcrypto,
      *     pg_trgm, citext, hstore and the rest, for `CREATE EXTENSION` (winter-ppa's
      *     `#[Extension]`).
@@ -107,6 +113,7 @@ final readonly class Postgres implements Service
         ?string $database = null,
         public string $encoding = 'UTF8',
         public string $locale = 'C',
+        ?string $timezone = null,
         public bool $contrib = true,
         public array $settings = [],
         public array $args = [],
@@ -162,9 +169,19 @@ final readonly class Postgres implements Service
             );
         }
         $this->database = $database;
+        $timezone ??= (string) env('TIME_ZONE', 'UTC');
+        if (!in_array($timezone, \DateTimeZone::listIdentifiers(\DateTimeZone::ALL_WITH_BC), true)) {
+            throw new \InvalidArgumentException(
+                "timezone \"{$timezone}\" is not a time zone name, as Asia/Tashkent or UTC."
+            );
+        }
+        $this->timezone = $timezone;
         foreach ($settings as $key => $value) {
             if (preg_match('/^[a-z_][a-z0-9_.]*$/i', (string) $key) !== 1) {
                 throw new \InvalidArgumentException("not a setting name: \"{$key}\".");
+            }
+            if (in_array(strtolower((string) $key), ['timezone', 'log_timezone'], true)) {
+                throw new \InvalidArgumentException("setting {$key}: the time zone is set with timezone:.");
             }
             if (!is_scalar($value) || str_contains((string) $value, "\n")) {
                 throw new \InvalidArgumentException("setting {$key}: a value is one line.");
@@ -196,7 +213,7 @@ final readonly class Postgres implements Service
         if ($this->host !== null) {
             $options[] = '--host=' . $this->host;
         }
-        $server = [];
+        $server = ['-c', "timezone={$this->timezone}", '-c', "log_timezone={$this->timezone}"];
         foreach ($this->settings as $key => $value) {
             array_push($server, '-c', $key . '=' . self::setting($value));
         }

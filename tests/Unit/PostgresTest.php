@@ -49,6 +49,7 @@ final class PostgresTest extends TestCase
             port: 5433,
             user: 'app',
             database: 'shop',
+            timezone: 'Asia/Tashkent',
             settings: ['shared_buffers' => '256MB', 'max_connections' => 200, 'fsync' => false],
             args: ['-c', 'log_min_messages=warning'],
         ))->component()->command;
@@ -67,11 +68,28 @@ final class PostgresTest extends TestCase
             '--encoding=UTF8',
             '--locale=C',
             '--',
+            '-c', 'timezone=Asia/Tashkent',
+            '-c', 'log_timezone=Asia/Tashkent',
             '-c', 'shared_buffers=256MB',
             '-c', 'max_connections=200',
             '-c', 'fsync=off',
             '-c', 'log_min_messages=warning',
         ], array_slice($command, 2));
+    }
+
+    public function test_the_time_zone_is_the_applications_unless_given(): void
+    {
+        $before = getenv('TIME_ZONE');
+        putenv('TIME_ZONE=Europe/Berlin');
+        $_ENV['TIME_ZONE'] = 'Europe/Berlin';
+        try {
+            self::assertSame('Europe/Berlin', (new Postgres())->timezone);
+            self::assertSame('UTC', (new Postgres(timezone: 'UTC'))->timezone);
+        } finally {
+            $before === false ? putenv('TIME_ZONE') : putenv("TIME_ZONE={$before}");
+            unset($_ENV['TIME_ZONE']);
+        }
+        self::assertSame('UTC', (new Postgres())->timezone, 'UTC without TIME_ZONE');
     }
 
     public function test_the_password_goes_through_the_environment_never_an_option(): void
@@ -176,6 +194,8 @@ final class PostgresTest extends TestCase
     {
         yield 'a version the image cannot install' => [static fn() => new Postgres(version: 13), 'PostgreSQL 13 is not one the image can install'];
         yield 'a relative data directory' => [static fn() => new Postgres(data: 'data'), 'data must be an absolute path'];
+        yield 'not a time zone' => [static fn() => new Postgres(timezone: 'Mars/Olympus'), 'timezone "Mars/Olympus" is not a time zone name'];
+        yield 'the time zone as a setting' => [static fn() => new Postgres(settings: ['TimeZone' => 'UTC']), 'the time zone is set with timezone:'];
         yield 'a path climbing up' => [static fn() => new Postgres(socket: '/run/../etc'), 'socket must be an absolute path'];
         yield 'a port out of range' => [static fn() => new Postgres(port: 70000), 'port must be 1–65535'];
         yield 'a host without a password' => [static fn() => new Postgres(host: '0.0.0.0'), 'set a password'];

@@ -12,7 +12,7 @@ All notable changes to this package are documented here. The format follows
   High priority, ready once `pg_isready` answers, checked while it runs (`alive`), stopped
   with a fast shutdown, restarted after a crash. Server parameters (`version`, `data`,
   `socket`, `host`, `port`, `user`, `password`, `database`, `encoding`, `locale`,
-  `contrib`, `settings`, `args`, `shutdown`, `logs`) and component parameters (`name`, `priority`,
+  `timezone` (the application's `TIME_ZONE` by default, set on every start), `contrib`, `settings`, `args`, `shutdown`, `logs`) and component parameters (`name`, `priority`,
   `critical`, `retries`, `grace`, `startTimeout`, `alive`), each checked when the object
   is made.
 - `Shutdown` — `Smart`, `Fast` and `Immediate`, PostgreSQL's three shutdown modes.

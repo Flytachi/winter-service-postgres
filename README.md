@@ -112,6 +112,7 @@ already answering. Its lines are in the common log, under `-postgres-` — see *
 | `database` | `null` | The application's database, created when it is missing — on any start, not only the first. `null`: one named after the role (`winter`) |
 | `encoding` | `'UTF8'` | The cluster's encoding (`initdb`) |
 | `locale` | `'C'` | The cluster's locale (`initdb`); Alpine's musl has few others |
+| `timezone` | `null` | The server's time zone (`timezone`, `log_timezone`), set on every start: what `now()::date` and `date_trunc('day', …)` count days by. `null`: the application's `TIME_ZONE` (UTC without it). An IANA name, `Asia/Tashkent`; not in `settings` |
 | `contrib` | `true` | Whether the image gets `postgresql{version}-contrib` — `pgcrypto`, `pg_trgm`, `citext` and the rest. See *Extensions* |
 | `settings` | `[]` | Server settings, each passed as `-c key=value`: `['shared_buffers' => '256MB', 'max_connections' => 200]`; `true`/`false` become `on`/`off` |
 | `args` | `[]` | Further `postgres` arguments, as they are |

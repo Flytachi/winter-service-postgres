@@ -220,6 +220,21 @@ final class StartScriptTest extends ServerCase
         self::assertSame('off', $db->query('SHOW fsync')->fetchColumn());
     }
 
+    public function test_the_time_zone_reaches_the_server_and_counts_its_days(): void
+    {
+        $postgres = $this->postgres(timezone: 'Asia/Tashkent');
+        self::assertTrue($this->start($postgres), $this->serverOutput());
+
+        $db = $this->socket($postgres);
+        self::assertSame('Asia/Tashkent', $db->query('SHOW timezone')->fetchColumn());
+        self::assertSame('Asia/Tashkent', $db->query('SHOW log_timezone')->fetchColumn());
+        self::assertSame(
+            '2026-11-15',
+            $db->query("SELECT ('2026-11-14 20:00:00+00'::timestamptz)::date")->fetchColumn(),
+            '20:00 UTC is the next day in Tashkent (+05)',
+        );
+    }
+
     public function test_a_fast_shutdown_ends_the_sessions_and_the_server_cleanly(): void
     {
         $postgres = $this->postgres();
