@@ -342,6 +342,29 @@ $id = new NoteRepository()->insert($note);
 Over TCP (`host` set, other containers connecting), `setUp()` takes `127.0.0.1` — or the
 container's name — for the host, and the password becomes mandatory.
 
+> [!NOTE]
+> Over TCP the application's role is let into its database only. DBeaver, TablePlus and
+> other clients with an empty "Database" field ask for the cluster's own `postgres`, and
+> get `no pg_hba.conf entry … database "postgres"`. Name the database of `database:` —
+> without it, `winter`, the role's name: `psql -h 127.0.0.1 -U winter -d winter`.
+
+### How many connections
+
+PostgreSQL's default is `max_connections = 100`, three of them kept for the superuser.
+winter-ppa's pool holds its connections **in every process**, so count:
+
+```
+(HTTP workers + the processes, daemons, scheduler, WebSockets that use the database)
+  × $poolMaxConnections
+  + ~5 — psql, migrations, checks
+```
+
+By default that is 1 worker × 5 = 5. It is hit when the workers grow: 8 workers
+(`SERVER_WORKERS=8`) × a pool of 20 is 160, and at a peak the database answers
+`too many clients already`. Make the pool smaller, or raise the limit —
+`settings: ['max_connections' => 200]` — with the container's memory in mind: every
+connection is a process of its own.
+
 ---
 
 ## Log
